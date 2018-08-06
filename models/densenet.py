@@ -7,6 +7,47 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as cp
 from collections import OrderedDict
+from enum import Enum
+from models.spectral_conv_2d import SpectralConv2d
+
+
+class EnumWithNames(Enum):
+    """
+    The Enum classes that inherit from the EnumWithNames will get the get_names
+    method to return an array of strings representing all possible enum values.
+    """
+
+    @classmethod
+    def get_names(cls):
+        return [enum_value.name for enum_value in cls]
+
+
+class OptimizerType(EnumWithNames):
+    MOMENTUM = 1
+    ADAM = 2
+    SGD = 3
+
+
+class RunType(EnumWithNames):
+    TEST = 0
+    DEBUG = 1
+
+
+class ModelType(EnumWithNames):
+    RES_NET = 0
+    DENSE_NET = 1
+
+
+DEFAULT_OPTIMIZER = OptimizerType.ADAM
+DEFAULT_RUN_TYPE = RunType.TEST
+DEFAULT_MODEL_TYPE = ModelType.DENSE_NET
+
+
+class ConvType(EnumWithNames):
+    STANDARD = 1
+    SPECTRAL_PARAM = 2
+    SPECTRAL_DIRECT = 3
+    SPATIAL_PARAM = 4
 
 
 def _bn_function_factory(norm, relu, conv):
@@ -19,43 +60,63 @@ def _bn_function_factory(norm, relu, conv):
 
 
 class _DenseLayer(nn.Module):
-    def __init__(self, num_input_features, growth_rate, bn_size, drop_rate, efficient=False):
+    def __init__(self, num_input_features, growth_rate, bn_size, drop_rate,
+                 conv_type, efficient=False):
         super(_DenseLayer, self).__init__()
         self.add_module('norm1', nn.BatchNorm2d(num_input_features)),
         self.add_module('relu1', nn.ReLU(inplace=True)),
-        self.add_module('conv1', nn.Conv2d(num_input_features, bn_size *
-                        growth_rate, kernel_size=1, stride=1, bias=False)),
+        if conv_type is ConvType.SPECTRAL_PARAM:
+            conv1 = SpectralConv2d(num_input_features, bn_size * growth_rate,
+                                   kernel_size=1, stride=1, bias=False)
+        else:
+            conv1 = nn.Conv2d(num_input_features, bn_size * growth_rate,
+                              kernel_size=1, stride=1, bias=False)
+        self.add_module('conv1', conv1)
         self.add_module('norm2', nn.BatchNorm2d(bn_size * growth_rate)),
         self.add_module('relu2', nn.ReLU(inplace=True)),
-        self.add_module('conv2', nn.Conv2d(bn_size * growth_rate, growth_rate,
-                        kernel_size=3, stride=1, padding=1, bias=False)),
+        if conv_type is ConvType.SPECTRAL_PARAM:
+            conv2 = SpectralConv2d(bn_size * growth_rate, growth_rate,
+                                   kernel_size=3, stride=1, padding=1,
+                                   bias=False)
+        else:
+            conv2 = nn.Conv2d(bn_size * growth_rate, growth_rate, kernel_size=3,
+                              stride=1, padding=1, bias=False)
+        self.add_module('conv2', conv2)
         self.drop_rate = drop_rate
         self.efficient = efficient
 
     def forward(self, *prev_features):
         bn_function = _bn_function_factory(self.norm1, self.relu1, self.conv1)
-        if self.efficient and any(prev_feature.requires_grad for prev_feature in prev_features):
+        if self.efficient and any(
+                prev_feature.requires_grad for prev_feature in prev_features):
             bottleneck_output = cp.checkpoint(bn_function, *prev_features)
         else:
             bottleneck_output = bn_function(*prev_features)
         new_features = self.conv2(self.relu2(self.norm2(bottleneck_output)))
         if self.drop_rate > 0:
-            new_features = F.dropout(new_features, p=self.drop_rate, training=self.training)
+            new_features = F.dropout(new_features, p=self.drop_rate,
+                                     training=self.training)
         return new_features
 
 
 class _Transition(nn.Sequential):
-    def __init__(self, num_input_features, num_output_features):
+    def __init__(self, num_input_features, num_output_features, conv_type):
         super(_Transition, self).__init__()
         self.add_module('norm', nn.BatchNorm2d(num_input_features))
         self.add_module('relu', nn.ReLU(inplace=True))
-        self.add_module('conv', nn.Conv2d(num_input_features, num_output_features,
-                                          kernel_size=1, stride=1, bias=False))
+        if conv_type is ConvType.SPECTRAL_PARAM:
+            conv = SpectralConv2d(num_input_features, num_output_features,
+                                  kernel_size=1, stride=1, bias=False)
+        else:
+            conv = nn.Conv2d(num_input_features, num_output_features,
+                             kernel_size=1, stride=1, bias=False)
+        self.add_module('conv', conv)
         self.add_module('pool', nn.AvgPool2d(kernel_size=2, stride=2))
 
 
 class _DenseBlock(nn.Module):
-    def __init__(self, num_layers, num_input_features, bn_size, growth_rate, drop_rate, efficient=False):
+    def __init__(self, num_layers, num_input_features, bn_size, growth_rate,
+                 drop_rate, conv_type, efficient=False):
         super(_DenseBlock, self).__init__()
         for i in range(num_layers):
             layer = _DenseLayer(
@@ -64,6 +125,7 @@ class _DenseBlock(nn.Module):
                 bn_size=bn_size,
                 drop_rate=drop_rate,
                 efficient=efficient,
+                conv_type=conv_type
             )
             self.add_module('denselayer%d' % (i + 1), layer)
 
@@ -89,9 +151,12 @@ class DenseNet(nn.Module):
         small_inputs (bool) - set to True if images are 32x32. Otherwise assumes images are larger.
         efficient (bool) - set to True to use checkpointing. Much more memory efficient, but slower.
     """
-    def __init__(self, growth_rate=12, block_config=(16, 16, 16), compression=0.5,
+
+    def __init__(self, growth_rate=12, block_config=(16, 16, 16),
+                 compression=0.5,
                  num_init_features=24, bn_size=4, drop_rate=0,
-                 num_classes=10, small_inputs=True, efficient=False):
+                 num_classes=10, small_inputs=True, efficient=False,
+                 conv_type=ConvType.SPECTRAL_PARAM):
 
         super(DenseNet, self).__init__()
         assert 0 < compression <= 1, 'compression of densenet should be between 0 and 1'
@@ -99,17 +164,38 @@ class DenseNet(nn.Module):
 
         # First convolution
         if small_inputs:
+            if conv_type is ConvType.SPECTRAL_PARAM:
+                conv = SpectralConv2d(in_channels=3,
+                                      out_channels=num_init_features,
+                                      kernel_size=3,
+                                      stride=1, padding=1, bias=False)
+            else:
+                conv = nn.Conv2d(in_channels=3, out_channels=num_init_features,
+                                 kernel_size=3, stride=1,
+                                 padding=1, bias=False)
             self.features = nn.Sequential(OrderedDict([
-                ('conv0', nn.Conv2d(3, num_init_features, kernel_size=3, stride=1, padding=1, bias=False)),
+                ('conv0', conv),
             ]))
         else:
+            if conv_type is ConvType.SPECTRAL_PARAM:
+                conv = SpectralConv2d(in_channels=3,
+                                      out_channels=num_init_features,
+                                      kernel_size=7,
+                                      stride=2, padding=3, bias=False)
+            else:
+                conv = nn.Conv2d(3, num_init_features, kernel_size=7, stride=2,
+                                 padding=3,
+                                 bias=False)
+
             self.features = nn.Sequential(OrderedDict([
-                ('conv0', nn.Conv2d(3, num_init_features, kernel_size=7, stride=2, padding=3, bias=False)),
+                ('conv0', conv),
             ]))
             self.features.add_module('norm0', nn.BatchNorm2d(num_init_features))
             self.features.add_module('relu0', nn.ReLU(inplace=True))
-            self.features.add_module('pool0', nn.MaxPool2d(kernel_size=3, stride=2, padding=1,
-                                                           ceil_mode=False))
+            self.features.add_module('pool0',
+                                     nn.MaxPool2d(kernel_size=3, stride=2,
+                                                  padding=1,
+                                                  ceil_mode=False))
 
         # Each denseblock
         num_features = num_init_features
@@ -121,12 +207,15 @@ class DenseNet(nn.Module):
                 growth_rate=growth_rate,
                 drop_rate=drop_rate,
                 efficient=efficient,
+                conv_type=conv_type
             )
             self.features.add_module('denseblock%d' % (i + 1), block)
             num_features = num_features + num_layers * growth_rate
             if i != len(block_config) - 1:
                 trans = _Transition(num_input_features=num_features,
-                                    num_output_features=int(num_features * compression))
+                                    num_output_features=int(
+                                        num_features * compression),
+                                    conv_type=conv_type)
                 self.features.add_module('transition%d' % (i + 1), trans)
                 num_features = int(num_features * compression)
 
@@ -151,6 +240,7 @@ class DenseNet(nn.Module):
     def forward(self, x):
         features = self.features(x)
         out = F.relu(features, inplace=True)
-        out = F.avg_pool2d(out, kernel_size=self.avgpool_size).view(features.size(0), -1)
+        out = F.avg_pool2d(out, kernel_size=self.avgpool_size).view(
+            features.size(0), -1)
         out = self.classifier(out)
         return out

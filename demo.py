@@ -1,16 +1,20 @@
+import time
+
 import fire
 import os
-import time
 import torch
 from torchvision import datasets, transforms
+
 from models import DenseNet
 
 
 class AverageMeter(object):
     """
     Computes and stores the average and current value
-    Copied from: https://github.com/pytorch/examples/blob/master/imagenet/main.py
+    Copied from:
+    https://github.com/pytorch/examples/blob/master/imagenet/main.py
     """
+
     def __init__(self):
         self.reset()
 
@@ -52,7 +56,9 @@ def train_epoch(model, loader, optimizer, epoch, n_epochs, print_freq=1):
         # measure accuracy and record loss
         batch_size = target.size(0)
         _, pred = output.data.cpu().topk(1, dim=1)
-        error.update(torch.ne(pred.squeeze(), target.cpu()).float().sum() / batch_size, batch_size)
+        error.update(
+            torch.ne(pred.squeeze(), target.cpu()).float().sum() / batch_size,
+            batch_size)
         losses.update(loss.item(), batch_size)
 
         # compute gradient and do SGD step
@@ -91,8 +97,10 @@ def test_epoch(model, loader, print_freq=1, is_test=True):
     for batch_idx, (input, target) in enumerate(loader):
         # Create vaiables
         if torch.cuda.is_available():
-            input_var = torch.autograd.Variable(input.cuda(async=True), volatile=True)
-            target_var = torch.autograd.Variable(target.cuda(async=True), volatile=True)
+            input_var = torch.autograd.Variable(input.cuda(async=True),
+                                                volatile=True)
+            target_var = torch.autograd.Variable(target.cuda(async=True),
+                                                 volatile=True)
         else:
             input_var = torch.autograd.Variable(input, volatile=True)
             target_var = torch.autograd.Variable(target, volatile=True)
@@ -104,7 +112,9 @@ def test_epoch(model, loader, print_freq=1, is_test=True):
         # measure accuracy and record loss
         batch_size = target.size(0)
         _, pred = output.data.cpu().topk(1, dim=1)
-        error.update(torch.ne(pred.squeeze(), target.cpu()).float().sum() / batch_size, batch_size)
+        error.update(
+            torch.ne(pred.squeeze(), target.cpu()).float().sum() / batch_size,
+            batch_size)
         losses.update(loss.data[0], batch_size)
 
         # measure elapsed time
@@ -135,21 +145,38 @@ def train(model, train_set, test_set, save, n_epochs=300, valid_size=5000,
     if valid_size:
         indices = torch.randperm(len(train_set))
         train_indices = indices[:len(indices) - valid_size]
-        train_sampler = torch.utils.data.sampler.SubsetRandomSampler(train_indices)
+        train_sampler = torch.utils.data.sampler.SubsetRandomSampler(
+            train_indices)
         valid_indices = indices[len(indices) - valid_size:]
-        valid_sampler = torch.utils.data.sampler.SubsetRandomSampler(valid_indices)
+        valid_sampler = torch.utils.data.sampler.SubsetRandomSampler(
+            valid_indices)
 
     # Data loaders
-    test_loader = torch.utils.data.DataLoader(test_set, batch_size=batch_size, shuffle=False,
-                                              pin_memory=(torch.cuda.is_available()), num_workers=0)
+    test_loader = torch.utils.data.DataLoader(test_set, batch_size=batch_size,
+                                              shuffle=False,
+                                              pin_memory=(
+                                                  torch.cuda.is_available()),
+                                              num_workers=0)
     if valid_size:
-        train_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, sampler=train_sampler,
-                                                   pin_memory=(torch.cuda.is_available()), num_workers=0)
-        valid_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, sampler=valid_sampler,
-                                                   pin_memory=(torch.cuda.is_available()), num_workers=0)
+        train_loader = torch.utils.data.DataLoader(train_set,
+                                                   batch_size=batch_size,
+                                                   sampler=train_sampler,
+                                                   pin_memory=(
+                                                       torch.cuda.is_available()),
+                                                   num_workers=0)
+        valid_loader = torch.utils.data.DataLoader(train_set,
+                                                   batch_size=batch_size,
+                                                   sampler=valid_sampler,
+                                                   pin_memory=(
+                                                       torch.cuda.is_available()),
+                                                   num_workers=0)
     else:
-        train_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True,
-                                                   pin_memory=(torch.cuda.is_available()), num_workers=0)
+        train_loader = torch.utils.data.DataLoader(train_set,
+                                                   batch_size=batch_size,
+                                                   shuffle=True,
+                                                   pin_memory=(
+                                                       torch.cuda.is_available()),
+                                                   num_workers=0)
         valid_loader = None
 
     # Model on cuda
@@ -162,13 +189,18 @@ def train(model, train_set, test_set, save, n_epochs=300, valid_size=5000,
         model_wrapper = torch.nn.DataParallel(model).cuda()
 
     # Optimizer
-    optimizer = torch.optim.SGD(model_wrapper.parameters(), lr=lr, momentum=momentum, nesterov=True, weight_decay=wd)
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[0.5 * n_epochs, 0.75 * n_epochs],
+    optimizer = torch.optim.SGD(model_wrapper.parameters(), lr=lr,
+                                momentum=momentum, nesterov=True,
+                                weight_decay=wd)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
+                                                     milestones=[0.5 * n_epochs,
+                                                                 0.75 * n_epochs],
                                                      gamma=0.1)
 
     # Start log
     with open(os.path.join(save, 'results.csv'), 'w') as f:
-        f.write('epoch,train_loss,train_error,valid_loss,valid_error,test_error\n')
+        f.write(
+            'epoch,train_loss,train_error,valid_loss,valid_error,test_error\n')
 
     # Train model
     best_error = 1
@@ -231,7 +263,7 @@ def demo(data, save, depth=100, growth_rate=12, efficient=True, valid_size=5000,
             (default $DATA_DIR)
         save (str) - path to save the model to (default /tmp)
 
-        depth (int) - depth of the network (number of convolution layers) (default 40)
+        depth (int) - depth of the network (number of convolution layers) (default 100)
         growth_rate (int) - number of features added per DenseNet layer (default 12)
         efficient (bool) - use the memory efficient implementation? (default True)
 
@@ -261,8 +293,10 @@ def demo(data, save, depth=100, growth_rate=12, efficient=True, valid_size=5000,
     ])
 
     # Datasets
-    train_set = datasets.CIFAR10(data, train=True, transform=train_transforms, download=True)
-    test_set = datasets.CIFAR10(data, train=False, transform=test_transforms, download=False)
+    train_set = datasets.CIFAR10(data, train=True, transform=train_transforms,
+                                 download=True)
+    test_set = datasets.CIFAR10(data, train=False, transform=test_transforms,
+                                download=True)
 
     # Models
     model = DenseNet(
@@ -282,7 +316,8 @@ def demo(data, save, depth=100, growth_rate=12, efficient=True, valid_size=5000,
 
     # Train the model
     train(model=model, train_set=train_set, test_set=test_set, save=save,
-          valid_size=valid_size, n_epochs=n_epochs, batch_size=batch_size, seed=seed)
+          valid_size=valid_size, n_epochs=n_epochs, batch_size=batch_size,
+          seed=seed)
     print('Done!')
 
 
@@ -297,7 +332,7 @@ Try out the naive DenseNet implementation:
 python demo.py --efficient False --data <path_to_data_dir> --save <path_to_save_dir>
 
 Other args:
-    --depth (int) - depth of the network (number of convolution layers) (default 40)
+    --depth (int) - depth of the network (number of convolution layers) (default 100)
     --growth_rate (int) - number of features added per DenseNet layer (default 12)
     --n_epochs (int) - number of epochs for training (default 300)
     --batch_size (int) - size of minibatch (default 256)
