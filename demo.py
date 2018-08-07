@@ -6,6 +6,7 @@ import torch
 from torchvision import datasets, transforms
 
 from models import DenseNet
+from models.densenet import ConvType
 
 
 class AverageMeter(object):
@@ -136,10 +137,13 @@ def test_epoch(model, loader, print_freq=1, is_test=True):
     return batch_time.avg, losses.avg, error.avg
 
 
-def train(model, train_set, test_set, save, n_epochs=300, valid_size=5000,
-          batch_size=64, lr=0.1, wd=0.0001, momentum=0.9, seed=None):
+def train(model, train_set, test_set, save, conv_type, n_epochs=300,
+          valid_size=5000, batch_size=64, lr=0.1, wd=0.0001, momentum=0.9,
+          seed=None):
     if seed is not None:
         torch.manual_seed(seed)
+
+    results_file = "results-" + conv_type.name + ".csv"
 
     # Create train/valid split
     if valid_size:
@@ -198,7 +202,7 @@ def train(model, train_set, test_set, save, n_epochs=300, valid_size=5000,
                                                      gamma=0.1)
 
     # Start log
-    with open(os.path.join(save, 'results.csv'), 'w') as f:
+    with open(os.path.join(save, results_file), 'w') as f:
         f.write(
             'epoch,train_loss,train_error,valid_loss,valid_error,test_error\n')
 
@@ -228,7 +232,7 @@ def train(model, train_set, test_set, save, n_epochs=300, valid_size=5000,
             torch.save(model.state_dict(), os.path.join(save, 'model.dat'))
 
         # Log results
-        with open(os.path.join(save, 'results.csv'), 'a') as f:
+        with open(os.path.join(save, results_file), 'a') as f:
             f.write('%03d,%0.6f,%0.6f,%0.5f,%0.5f,\n' % (
                 (epoch + 1),
                 train_loss,
@@ -247,13 +251,14 @@ def train(model, train_set, test_set, save, n_epochs=300, valid_size=5000,
         is_test=True
     )
     _, _, test_error = test_results
-    with open(os.path.join(save, 'results.csv'), 'a') as f:
+    with open(os.path.join(save, results_file), 'a') as f:
         f.write(',,,,,%0.5f\n' % (test_error))
     print('Final test error: %.4f' % test_error)
 
 
 def demo(data, save, depth=100, growth_rate=12, efficient=True, valid_size=5000,
-         n_epochs=300, batch_size=64, seed=None):
+         n_epochs=300, batch_size=64, seed=None,
+         conv_type="SPECTRAL_PARAM"):
     """
     A demo to show off training of efficient DenseNets.
     Trains and evaluates a DenseNet-BC on CIFAR-10.
@@ -271,8 +276,10 @@ def demo(data, save, depth=100, growth_rate=12, efficient=True, valid_size=5000,
         n_epochs (int) - number of epochs for training (default 300)
         batch_size (int) - size of minibatch (default 256)
         seed (int) - manually set the random seed (default None)
+        conv_type (str) - the type of applied convolution: SPECTRAL_PARAM or
+        STANDARD
     """
-
+    conv_type = ConvType[conv_type]
     # Get densenet configuration
     if (depth - 4) % 3:
         raise Exception('Invalid depth')
@@ -305,6 +312,7 @@ def demo(data, save, depth=100, growth_rate=12, efficient=True, valid_size=5000,
         num_classes=10,
         small_inputs=True,
         efficient=efficient,
+        conv_type=conv_type
     )
     print(model)
 
@@ -316,8 +324,8 @@ def demo(data, save, depth=100, growth_rate=12, efficient=True, valid_size=5000,
 
     # Train the model
     train(model=model, train_set=train_set, test_set=test_set, save=save,
-          valid_size=valid_size, n_epochs=n_epochs, batch_size=batch_size,
-          seed=seed)
+          conv_type=conv_type, valid_size=valid_size, n_epochs=n_epochs,
+          batch_size=batch_size, seed=seed)
     print('Done!')
 
 
